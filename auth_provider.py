@@ -24,6 +24,10 @@ class AuthFailed(Exception):
     """Supabase rejected the request (bad credentials, existing user, weak password...)."""
 
 
+class InvalidToken(Exception):
+    """The access token is expired, tampered with, or not a Supabase token."""
+
+
 class SupabaseAuth:
     """Thin wrapper so routes depend on 4-5 plain methods, and tests can swap in a fake."""
 
@@ -44,24 +48,24 @@ class SupabaseAuth:
                 "token_type": "bearer", "expires_in": s.expires_in}
 
 
+    def get_user(self, token: str) -> dict:
+        try:
+            res = new_client().auth.get_user(token)  # network call: Supabase checks signature + expiry
+        except Exception as exc:
+            raise InvalidToken() from exc
+        if not res or not res.user:
+            raise InvalidToken()
+        u = res.user
+        return {"id": u.id, "email": u.email,
+                "created_at": u.created_at.isoformat() if u.created_at else None,
+                "role": (u.app_metadata or {}).get("role", "user")}
+
+    def sign_out(self, token: str) -> None:
+        """Revokes this session's refresh token at Supabase (scope=local: only this device)."""
+        new_client().auth.admin.sign_out(token, "local")
+
+
 def get_auth() -> SupabaseAuth:
     return SupabaseAuth()
 
 
-class InvalidToken(Exception):
-    """The access token is expired, tampered with, or not a Supabase token."""
-
-
-def _verify(token: str) -> dict:
-    try:
-        res = new_client().auth.get_user(token)  # a real network call: Supabase checks the signature + expiry
-    except Exception as exc:
-        raise InvalidToken() from exc
-    if not res or not res.user:
-        raise InvalidToken()
-    u = res.user
-    return {"id": u.id, "email": u.email, "created_at": u.created_at.isoformat() if u.created_at else None,
-            "role": (u.app_metadata or {}).get("role", "user")}
-
-
-SupabaseAuth.get_user = lambda self, token: _verify(token)  # noqa: E731  (kept tiny for Stage 3)

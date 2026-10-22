@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -70,13 +70,41 @@ def bearer_token(authorization: str | None) -> str | None:
     return token.strip()
 
 
-@app.get("/protected/profile")
-def profile(request: Request, auth: SupabaseAuth = Depends(get_auth)):
+class Unauthorized(Exception):
+    def __init__(self, message: str):
+        self.message = message
+
+
+@app.exception_handler(Unauthorized)
+async def unauthorized(_request: Request, exc: Unauthorized):
+    return JSONResponse(status_code=401, content={"error": exc.message},
+                        headers={"WWW-Authenticate": "Bearer"})
+
+
+def current_user(request: Request, auth: SupabaseAuth = Depends(get_auth)) -> dict:
+    """The guard. Any route that declares `user = Depends(current_user)` only runs for a verified user."""
     token = bearer_token(request.headers.get("Authorization"))
     if not token:
-        return error(401, "Access token required")
+        raise Unauthorized("Access token required")
     try:
         user = auth.get_user(token)
     except InvalidToken:
-        return error(401, "Invalid or expired token")
+        raise Unauthorized("Invalid or expired token")
+    request.state.token = token
+    return user
+
+
+@app.get("/protected/profile")
+def profile(user: dict = Depends(current_user)):
     return {"id": user["id"], "email": user["email"], "created_at": user["created_at"]}
+
+
+@app.get("/protected/dashboard")
+def dashboard(user: dict = Depends(current_user)):
+    return {"message": f"Hello {user['email']}, this is your private dashboard."}
+
+
+@app.post("/auth/logout", status_code=204)
+def logout(request: Request, _user: dict = Depends(current_user), auth: SupabaseAuth = Depends(get_auth)):
+    auth.sign_out(request.state.token)
+    return Response(status_code=204)
