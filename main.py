@@ -53,3 +53,26 @@ def login(body: Credentials, auth: SupabaseAuth = Depends(get_auth)):
         return auth.sign_in(body.email, body.password)
     except AuthFailed:
         return error(401, "Invalid login credentials")
+
+
+@app.get("/public/info")
+def public_info():
+    return {"message": "Welcome stranger! This info is public."}
+
+
+def bearer_token(authorization: str | None) -> str | None:
+    """'Bearer <token>' → '<token>'. Anything else (missing, wrong scheme, empty) → None."""
+    if not authorization:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
+@app.get("/protected/profile")
+def profile(request: Request):
+    token = bearer_token(request.headers.get("Authorization"))
+    if not token:
+        return error(401, "Access token required")
+    return {"message": "Token presented (not verified yet)"}
