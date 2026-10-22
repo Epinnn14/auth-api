@@ -1,6 +1,7 @@
 import logging
 
-from fastapi import Depends, FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response, Security
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -11,7 +12,15 @@ from auth_provider import AuthFailed, InvalidToken, SupabaseAuth, get_auth
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("auth-api")
 
-app = FastAPI(title="Auth API", version="1.0")
+app = FastAPI(
+    title="Auth API",
+    version="1.0",
+    description="Sign up, log in and log out with Supabase Auth; JWT-protected routes (FlyRank Backend track, A4). "
+                "Click **Authorize** and paste an access_token from /auth/login to try the locked routes.",
+)
+
+E401 = {401: {"description": "Missing, malformed, invalid or expired token",
+              "content": {"application/json": {"example": {"error": "Invalid or expired token"}}}}}
 
 if auth_provider.SUPABASE_URL:
     auth_provider.new_client()
@@ -34,12 +43,12 @@ async def validation_error(_request: Request, exc: RequestValidationError):
     return error(400, f"{field}: {first['msg']}")
 
 
-@app.get("/health")
+@app.get("/health", tags=["meta"], summary="Liveness check")
 def health():
     return {"status": "ok"}
 
 
-@app.post("/auth/signup", status_code=201)
+@app.post("/auth/signup", status_code=201, tags=["auth"], summary="Create an account (no auth)", responses={400: {"description": "Missing field or Supabase rejected it"}})
 def signup(body: Credentials, auth: SupabaseAuth = Depends(get_auth)):
     try:
         return {"user": auth.sign_up(body.email, body.password)}
@@ -47,7 +56,7 @@ def signup(body: Credentials, auth: SupabaseAuth = Depends(get_auth)):
         return error(400, str(exc))
 
 
-@app.post("/auth/login")
+@app.post("/auth/login", tags=["auth"], summary="Log in, returns access + refresh tokens (no auth)", responses={401: {"description": "Invalid login credentials"}})
 def login(body: Credentials, auth: SupabaseAuth = Depends(get_auth)):
     try:
         return auth.sign_in(body.email, body.password)
@@ -55,7 +64,7 @@ def login(body: Credentials, auth: SupabaseAuth = Depends(get_auth)):
         return error(401, "Invalid login credentials")
 
 
-@app.get("/public/info")
+@app.get("/public/info", tags=["public"], summary="Public data, no token needed")
 def public_info():
     return {"message": "Welcome stranger! This info is public."}
 
@@ -81,8 +90,15 @@ async def unauthorized(_request: Request, exc: Unauthorized):
                         headers={"WWW-Authenticate": "Bearer"})
 
 
-def current_user(request: Request, auth: SupabaseAuth = Depends(get_auth)) -> dict:
-    """The guard. Any route that declares `user = Depends(current_user)` only runs for a verified user."""
+bearer_scheme = HTTPBearer(auto_error=False, bearerFormat="JWT",
+                           description="Paste the access_token from POST /auth/login")
+
+
+def current_user(request: Request,
+                 _creds: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+                 auth: SupabaseAuth = Depends(get_auth)) -> dict:
+    """The guard. Any route that declares `user = Depends(current_user)` only runs for a verified user.
+    The HTTPBearer scheme is what puts the padlock in Swagger; the header is still parsed strictly here."""
     token = bearer_token(request.headers.get("Authorization"))
     if not token:
         raise Unauthorized("Access token required")
@@ -94,17 +110,17 @@ def current_user(request: Request, auth: SupabaseAuth = Depends(get_auth)) -> di
     return user
 
 
-@app.get("/protected/profile")
+@app.get("/protected/profile", tags=["protected"], summary="Your profile (Bearer token)", responses=E401)
 def profile(user: dict = Depends(current_user)):
     return {"id": user["id"], "email": user["email"], "created_at": user["created_at"]}
 
 
-@app.get("/protected/dashboard")
+@app.get("/protected/dashboard", tags=["protected"], summary="A second protected route, same guard", responses=E401)
 def dashboard(user: dict = Depends(current_user)):
     return {"message": f"Hello {user['email']}, this is your private dashboard."}
 
 
-@app.post("/auth/logout", status_code=204)
+@app.post("/auth/logout", status_code=204, tags=["auth"], summary="End this session (Bearer token)", responses=E401)
 def logout(request: Request, _user: dict = Depends(current_user), auth: SupabaseAuth = Depends(get_auth)):
     auth.sign_out(request.state.token)
     return Response(status_code=204)
