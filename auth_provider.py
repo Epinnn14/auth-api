@@ -18,3 +18,31 @@ def new_client() -> Client:
         raise RuntimeError("SUPABASE_URL and SUPABASE_KEY must be set in .env")
     return create_client(SUPABASE_URL, SUPABASE_KEY,
                          options=ClientOptions(persist_session=False, auto_refresh_token=False))
+
+
+class AuthFailed(Exception):
+    """Supabase rejected the request (bad credentials, existing user, weak password...)."""
+
+
+class SupabaseAuth:
+    """Thin wrapper so routes depend on 4-5 plain methods, and tests can swap in a fake."""
+
+    def sign_up(self, email: str, password: str) -> dict:
+        try:
+            res = new_client().auth.sign_up({"email": email, "password": password})
+        except Exception as exc:  # supabase_auth.errors.AuthApiError and friends
+            raise AuthFailed(getattr(exc, "message", str(exc))) from exc
+        return res.user.model_dump(mode="json")
+
+    def sign_in(self, email: str, password: str) -> dict:
+        try:
+            res = new_client().auth.sign_in_with_password({"email": email, "password": password})
+        except Exception as exc:
+            raise AuthFailed("Invalid login credentials") from exc
+        s = res.session
+        return {"access_token": s.access_token, "refresh_token": s.refresh_token,
+                "token_type": "bearer", "expires_in": s.expires_in}
+
+
+def get_auth() -> SupabaseAuth:
+    return SupabaseAuth()
