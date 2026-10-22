@@ -60,6 +60,16 @@ class SupabaseAuth:
                 "created_at": u.created_at.isoformat() if u.created_at else None,
                 "role": (u.app_metadata or {}).get("role", "user")}
 
+    def refresh(self, refresh_token: str) -> dict:
+        """Trade a refresh token for a new access token (no password needed)."""
+        try:
+            res = new_client().auth.refresh_session(refresh_token)
+        except Exception as exc:
+            raise InvalidToken() from exc
+        s = res.session
+        return {"access_token": s.access_token, "refresh_token": s.refresh_token,
+                "token_type": "bearer", "expires_in": s.expires_in}
+
     def sign_out(self, token: str) -> None:
         """Revokes this session's refresh token at Supabase (scope=local: only this device)."""
         new_client().auth.admin.sign_out(token, "local")
@@ -67,5 +77,6 @@ class SupabaseAuth:
 
 def get_auth() -> SupabaseAuth:
     return SupabaseAuth()
+
 
 

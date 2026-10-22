@@ -1,4 +1,7 @@
 import logging
+import os
+import time
+from collections import defaultdict
 
 from fastapi import Depends, FastAPI, Request, Response, Security
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -56,12 +59,46 @@ def signup(body: Credentials, auth: SupabaseAuth = Depends(get_auth)):
         return error(400, str(exc))
 
 
-@app.post("/auth/login", tags=["auth"], summary="Log in, returns access + refresh tokens (no auth)", responses={401: {"description": "Invalid login credentials"}})
+# --- brute-force protection: 5 failed logins per email per 15 minutes, then 429 ---
+MAX_FAILED_LOGINS = int(os.environ.get("MAX_FAILED_LOGINS", "5"))
+LOCKOUT_SECONDS = 15 * 60
+_failed: dict[str, list[float]] = defaultdict(list)
+
+
+def _recent_failures(email: str) -> list[float]:
+    now = time.monotonic()
+    _failed[email] = [t for t in _failed[email] if now - t < LOCKOUT_SECONDS]
+    return _failed[email]
+
+
+@app.post("/auth/login", tags=["auth"], summary="Log in, returns access + refresh tokens (no auth)",
+          responses={401: {"description": "Invalid login credentials"},
+                     429: {"description": "Too many failed attempts for this email"}})
 def login(body: Credentials, auth: SupabaseAuth = Depends(get_auth)):
+    email = body.email.strip().lower()
+    if len(_recent_failures(email)) >= MAX_FAILED_LOGINS:
+        return JSONResponse(status_code=429, headers={"Retry-After": str(LOCKOUT_SECONDS)},
+                            content={"error": "Too many failed login attempts. Try again in 15 minutes."})
     try:
-        return auth.sign_in(body.email, body.password)
+        tokens = auth.sign_in(body.email, body.password)
     except AuthFailed:
+        _failed[email].append(time.monotonic())
         return error(401, "Invalid login credentials")
+    _failed.pop(email, None)
+    return tokens
+
+
+class RefreshBody(BaseModel):
+    refresh_token: str = Field(min_length=1)
+
+
+@app.post("/auth/refresh", tags=["auth"], summary="New access token from a refresh token (no password)",
+          responses={401: {"description": "Invalid or expired refresh token"}})
+def refresh(body: RefreshBody, auth: SupabaseAuth = Depends(get_auth)):
+    try:
+        return auth.refresh(body.refresh_token)
+    except InvalidToken:
+        return error(401, "Invalid or expired refresh token")
 
 
 @app.get("/public/info", tags=["public"], summary="Public data, no token needed")
@@ -124,3 +161,15 @@ def dashboard(user: dict = Depends(current_user)):
 def logout(request: Request, _user: dict = Depends(current_user), auth: SupabaseAuth = Depends(get_auth)):
     auth.sign_out(request.state.token)
     return Response(status_code=204)
+
+
+ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
+
+
+@app.get("/protected/admin", tags=["protected"], summary="Admins only: 401 if unknown, 403 if not an admin",
+         responses={**E401, 403: {"description": "Logged in, but not an admin"}})
+def admin_area(user: dict = Depends(current_user)):
+    is_admin = user.get("role") == "admin" or (user.get("email") or "").lower() in ADMIN_EMAILS
+    if not is_admin:
+        return error(403, "Forbidden: admin only")
+    return {"message": f"Welcome, admin {user['email']}"}
