@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 import auth_provider
-from auth_provider import AuthFailed, SupabaseAuth, get_auth
+from auth_provider import AuthFailed, InvalidToken, SupabaseAuth, get_auth
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("auth-api")
@@ -71,8 +71,12 @@ def bearer_token(authorization: str | None) -> str | None:
 
 
 @app.get("/protected/profile")
-def profile(request: Request):
+def profile(request: Request, auth: SupabaseAuth = Depends(get_auth)):
     token = bearer_token(request.headers.get("Authorization"))
     if not token:
         return error(401, "Access token required")
-    return {"message": "Token presented (not verified yet)"}
+    try:
+        user = auth.get_user(token)
+    except InvalidToken:
+        return error(401, "Invalid or expired token")
+    return {"id": user["id"], "email": user["email"], "created_at": user["created_at"]}

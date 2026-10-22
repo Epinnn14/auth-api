@@ -46,3 +46,22 @@ class SupabaseAuth:
 
 def get_auth() -> SupabaseAuth:
     return SupabaseAuth()
+
+
+class InvalidToken(Exception):
+    """The access token is expired, tampered with, or not a Supabase token."""
+
+
+def _verify(token: str) -> dict:
+    try:
+        res = new_client().auth.get_user(token)  # a real network call: Supabase checks the signature + expiry
+    except Exception as exc:
+        raise InvalidToken() from exc
+    if not res or not res.user:
+        raise InvalidToken()
+    u = res.user
+    return {"id": u.id, "email": u.email, "created_at": u.created_at.isoformat() if u.created_at else None,
+            "role": (u.app_metadata or {}).get("role", "user")}
+
+
+SupabaseAuth.get_user = lambda self, token: _verify(token)  # noqa: E731  (kept tiny for Stage 3)
