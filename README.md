@@ -77,9 +77,44 @@ You can do the same in Swagger at http://localhost:8000/docs: click **Authorize*
 
 ![Swagger UI with the bearer padlock](docs/swagger.png)
 
+## Proof: a real run against Supabase
+
+`scripts/smoke_test.py` runs every checkpoint against the running server and a real Supabase project, and masks the
+tokens in its output. It needs two terminals:
+
+```powershell
+uvicorn main:app                                              # terminal 1
+python scripts/smoke_test.py you+test@gmail.com password123   # terminal 2
+```
+
+Output from a real run on 2026-10-27, with a free Supabase project and "Confirm email" turned off:
+
+```text
+OK POST /auth/signup                            → 201  {"user":{"id":"861ed393-…","app_metadata":{"provider":"email",...
+OK POST /auth/signup (missing password)         → 400  {"error":"password: Field required"}
+OK POST /auth/login (wrong password)            → 401  {"error":"Invalid login credentials"}
+OK POST /auth/login                             → 200  {"access_token":"eyJhbGciOiJF…(masked)","refresh_token":"…(masked)","token_type":"bearer","expires_in":3600}
+OK GET /public/info                             → 200  {"message":"Welcome stranger! This info is public."}
+OK GET /protected/profile (no token)            → 401  {"error":"Access token required"}
+OK GET /protected/profile (Authorization: abc)  → 401  {"error":"Access token required"}
+OK GET /protected/profile (tampered token)      → 401  {"error":"Invalid or expired token"}
+OK GET /protected/profile                       → 200  {"id":"861ed393-…","email":"flyrank.tester2@gmail.com","created_at":"2026-10-27T06:09:15.755643+00:00"}
+OK GET /protected/dashboard                     → 200  {"message":"Hello flyrank.tester2@gmail.com, this is your private dashboard."}
+OK GET /protected/admin                         → 403  {"error":"Forbidden: admin only"}
+OK POST /auth/logout                            → 204
+```
+
+**Two things the real run taught us:**
+
+- **Supabase rejects `@example.com` addresses** with `Email address "test@example.com" is invalid`, so use a
+  realistic-looking address.
+- **With "Confirm email" on, signup succeeds but login fails.** The API used to report that as "Invalid login
+  credentials", which was misleading. It now answers **403** with `Email not confirmed …` and how to fix it. That
+  answer doesn't count toward the brute-force lockout, because it isn't a password guess.
+
 ## Tests
 
-`pip install -r requirements-dev.txt` then `pytest -q`. All **15 pass**. They cover every checkpoint in the brief:
+`pip install -r requirements-dev.txt` then `pytest -q`. All **16 pass**. They cover every checkpoint in the brief:
 
 - 201, 200, 204, 400 and 401 responses
 - tampered tokens and malformed headers
@@ -113,12 +148,12 @@ tampered token, refresh, logout).
 ## Limitations
 
 - **The rate limiter is in memory.** It resets on restart and isn't shared between server instances. Production would use Redis.
-- **This build wasn't run against a real Supabase project,** because the build environment can't reach supabase.co. It was
-  tested with the fake provider and the mock auth server described above. Run the curl list above against your own
-  project before submitting.
 
 ## How AI was used
 
 Built **with an AI assistant (Claude)**, and stated openly here. The brief asks for Stages 0–6 to be written by hand,
-and this version wasn't, so the optional "AI vs me" stage doesn't apply. Verified by running it: the 15 tests and
-the wrapper-vs-mock-server run described above.
+and this version wasn't, so the optional "AI vs me" stage doesn't apply. Verified by running it:
+
+- the 16 tests
+- the wrapper-vs-mock-server run
+- the real Supabase run above
