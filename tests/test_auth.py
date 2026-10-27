@@ -89,6 +89,23 @@ def test_login_returns_tokens_or_401(client):
     assert client.post("/auth/login", json={"email": "test@example.com"}).status_code == 400
 
 
+def test_unconfirmed_email_gets_a_clear_403(client):
+    from auth_provider import EmailNotConfirmed
+    from main import app
+    from auth_provider import get_auth
+
+    class Unconfirmed:
+        def sign_in(self, email, password):
+            raise EmailNotConfirmed("Email not confirmed")
+
+    app.dependency_overrides[get_auth] = lambda: Unconfirmed()
+    try:
+        r = client.post("/auth/login", json={"email": "new@example.com", "password": "password123"})
+    finally:
+        app.dependency_overrides.pop(get_auth, None)
+    assert r.status_code == 403 and "Email not confirmed" in r.json()["error"]
+
+
 def test_public_is_open(client):
     r = client.get("/public/info")
     assert r.status_code == 200 and r.json() == {"message": "Welcome stranger! This info is public."}

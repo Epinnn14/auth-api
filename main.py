@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 import auth_provider
-from auth_provider import AuthFailed, InvalidToken, SupabaseAuth, get_auth
+from auth_provider import AuthFailed, EmailNotConfirmed, InvalidToken, SupabaseAuth, get_auth
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 log = logging.getLogger("auth-api")
@@ -81,6 +81,10 @@ def login(body: Credentials, auth: SupabaseAuth = Depends(get_auth)):
                             content={"error": "Too many failed login attempts. Try again in 15 minutes."})
     try:
         tokens = auth.sign_in(body.email, body.password)
+    except EmailNotConfirmed:
+        # not a password guess, so it doesn't count toward the lockout; say exactly what to do
+        return error(403, "Email not confirmed. Click the link in the confirmation email, or turn off "
+                          "'Confirm email' in Supabase (Authentication > Sign In / Providers > Email) for practice.")
     except AuthFailed:
         _failed[email].append(time.monotonic())
         return error(401, "Invalid login credentials")

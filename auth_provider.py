@@ -24,6 +24,10 @@ class AuthFailed(Exception):
     """Supabase rejected the request (bad credentials, existing user, weak password...)."""
 
 
+class EmailNotConfirmed(AuthFailed):
+    """Right password, but Supabase's "Confirm email" is on and this address was never confirmed."""
+
+
 class InvalidToken(Exception):
     """The access token is expired, tampered with, or not a Supabase token."""
 
@@ -42,6 +46,8 @@ class SupabaseAuth:
         try:
             res = new_client().auth.sign_in_with_password({"email": email, "password": password})
         except Exception as exc:
+            if getattr(exc, "code", None) == "email_not_confirmed" or "not confirmed" in str(exc).lower():
+                raise EmailNotConfirmed("Email not confirmed") from exc
             raise AuthFailed("Invalid login credentials") from exc
         s = res.session
         return {"access_token": s.access_token, "refresh_token": s.refresh_token,
